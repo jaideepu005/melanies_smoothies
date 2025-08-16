@@ -44,7 +44,7 @@ ingredients_list = st.multiselect(
     max_selections=5,
 )
 
-# --- Nutrition display (non-blocking)
+# --- Nutrition display
 if ingredients_list:
     with st.expander("Nutrition details for selected fruits", expanded=True):
         for fruit_chosen in ingredients_list:
@@ -61,7 +61,7 @@ if ingredients_list:
                 resp.raise_for_status()
                 data = resp.json()
                 st.dataframe(data=data, use_container_width=True)
-            except Exception as e:
+            except Exception:
                 st.info(
                     f"Could not load nutrition for {fruit_chosen} right now. You can still place your order."
                 )
@@ -84,7 +84,7 @@ with preview_col:
     )
 
 if submitted:
-    # Optional: ensure target table exists (idempotent). Comment out if your env already has it.
+    # Ensure target table exists
     session.sql(
         """
         CREATE TABLE IF NOT EXISTS SMOOTHIES.PUBLIC.ORDERS (
@@ -96,10 +96,10 @@ if submitted:
         """
     ).collect()
 
-    # Safe append via Snowpark DataFrame (avoids SQL injection and quoting issues)
+    # ✅ FIX: align schema with table (NAME_ON_ORDER first, INGREDIENTS second)
     df_to_write = session.create_dataframe(
-        [[ingredients_string, name_on_order]],
-        schema=["INGREDIENTS", "NAME_ON_ORDER"],
+        [[name_on_order, ingredients_string]],
+        schema=["NAME_ON_ORDER", "INGREDIENTS"],
     )
     df_to_write.write.save_as_table("SMOOTHIES.PUBLIC.ORDERS", mode="append")
 
