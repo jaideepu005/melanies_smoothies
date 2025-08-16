@@ -1,4 +1,5 @@
 import streamlit as st
+import requests  # <-- needed for the API call
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.functions import col
 
@@ -29,10 +30,24 @@ ingredients_list = st.multiselect(
     max_selections=5
 )
 
-# If user selected ingredients, display them and prepare SQL insert
+# If user selected ingredients, display them and fetch nutrition info
 if ingredients_list:
-    st.text("\n".join(f"{i+1}: {fruit}" for i, fruit in enumerate(ingredients_list)))
-    ingredients_string = ', '.join(ingredients_list)
+    ingredients_string = ''
+
+    for fruit_chosen in ingredients_list:
+        ingredients_string += fruit_chosen + ', '
+        st.subheader(fruit_chosen + ' Nutrition Information')
+
+        # Call API for nutrition data
+        smoothiefroot_response = requests.get("https://my.smoothiefroot.com/api/fruit/" + fruit_chosen)
+
+        if smoothiefroot_response.status_code == 200:
+            st.dataframe(data=smoothiefroot_response.json(), use_container_width=True)
+        else:
+            st.error(f"Could not fetch data for {fruit_chosen}")
+
+    # Remove trailing comma + space
+    ingredients_string = ingredients_string.rstrip(', ')
 
     # SQL insert statement
     my_insert_stmt = f"""
