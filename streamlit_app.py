@@ -1,120 +1,89 @@
-import json
-import requests
-import pandas as pd
 import streamlit as st
+import requests
+from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.functions import col
 
-# --- Page config
-st.set_page_config(page_title="Smoothie Builder", layout="wide")
+# -------------------------------
+# UI Setup
+# -------------------------------
+st.title("🥤 Customize Your Smoothie ! 🥤")
+st.write("Choose the fruits you want in your custom Smoothie!")
 
-# --- Snowflake connection / session
-cnx = st.connection("snowflake", type="snowflake")
-session = cnx.session()
+# Input: Name on order
+name_on_order = st.text_input("Name on Smoothie")
+st.write("The name of the smoothie will be:", name_on_order)
 
-# --- UI Header
-st.title("🥤 Customize Your Smoothie! 🥤")
-st.write("Choose the fruits you want in your custom Smoothie! Up to five.")
+# -------------------------------
+# Snowflake Session
+# -------------------------------
+session = get_active_session()
 
-# --- Name input
-name_on_order = st.text_input("Name On Smoothie:").strip()
-st.caption(f"The name on your smoothie will be: {name_on_order or '—'}")
+# Load fruit options
+my_dataframe = session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS").select(
+    col("FRUIT_NAME"), col("SEARCH_ON")
+)
 
-# --- Load fruit options from Snowflake (cached for 5 mins)
-@st.cache_data(ttl=300)
-def load_fruit_options():
-    sp_df = (
-        session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-        .select(col("FRUIT_NAME"), col("SEARCH_ON"))
-        .sort(col("FRUIT_NAME"))
-    )
-    return sp_df.to_pandas()
-
-pd_df = load_fruit_options()
-
-# --- Safety: ensure required columns exist
-required_cols = {"FRUIT_NAME", "SEARCH_ON"}
-if not required_cols.issubset(set(pd_df.columns)):
-    st.error("FRUIT_OPTIONS table must contain FRUIT_NAME and SEARCH_ON columns.")
-    st.stop()
-
-# --- Ingredient picker
+# Multiselect fruits
 ingredients_list = st.multiselect(
     "Choose up to 5 ingredients:",
-    options=pd_df["FRUIT_NAME"].tolist(),
+    [row["FRUIT_NAME"] for row in my_dataframe.collect()],
     max_selections=5,
 )
 
-# --- Nutrition display
+# -------------------------------
+# Show Nutrition Info + Build String
+# -------------------------------
+ingredients_string = ", ".join(ingredients_list)  # ✅ Auto-trimmed clean string
+
 if ingredients_list:
-    with st.expander("Nutrition details for selected fruits", expanded=True):
-        for fruit_chosen in ingredients_list:
-            row = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_chosen]
-            if row.empty:
-                st.warning(f"No lookup found for {fruit_chosen}.")
-                continue
-            search_on = row["SEARCH_ON"].iloc[0]
-            st.subheader(f"{fruit_chosen} – Nutrition Information")
-            try:
-                resp = requests.get(
-                    f"https://fruityvice.com/api/fruit/{search_on}", timeout=8
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                st.dataframe(data=data, use_container_width=True)
-            except Exception:
-                st.info(
-                    f"Could not load nutrition for {fruit_chosen} right now. You can still place your order."
-                )
+    for fruit_chosen in ingredients_list:
+        st.subheader(fruit_chosen + " Nutrition Information")
 
-# --- Build clean ingredients string
-ingredients_string = ", ".join(ingredients_list) if ingredients_list else ""
-
-# --- Validation + preview
-submit_disabled = (not name_on_order) or (len(ingredients_list) == 0)
-submit_col, preview_col = st.columns([1, 3])
-with submit_col:
-    submitted = st.button("Submit Order", disabled=submit_disabled)
-with preview_col:
-    st.write(
-        "Preview:",
-        {
-            "NAME_ON_ORDER": name_on_order or "",
-            "INGREDIENTS": ingredients_string or "",
-        },
-    )
-
-# --- Submit order
-if submitted:
-    # Ensure target table exists
-    session.sql(
-        """
-        CREATE TABLE IF NOT EXISTS SMOOTHIES.PUBLIC.ORDERS (
-            ORDER_ID INTEGER AUTOINCREMENT,
-            NAME_ON_ORDER STRING NOT NULL,
-            INGREDIENTS STRING NOT NULL,
-            ORDER_TS TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+        search_value = (
+            my_dataframe.filter(col("FRUIT_NAME") == fruit_chosen)
+            .collect()[0]["SEARCH_ON"]
         )
-        """
-    ).collect()
 
-    # ✅ FIX: insert with schema aligned (name-based matching)
-    df_to_write = session.create_dataframe(
-        [[name_on_order, ingredients_string]],
-        schema=["NAME_ON_ORDER", "INGREDIENTS"],
-    )
-    df_to_write.write.mode("append").option("column_order", "name").save_as_table(
-        "SMOOTHIES.PUBLIC.ORDERS"
-    )
+        smoothiefroot_response = requests.get(
+            "https://my.smoothiefroot.com/api/fruit/" + search_value
+        )
 
-    st.success("✅ Your Smoothie is ordered!")
+        st.dataframe(data=smoothiefroot_response.json(), use_container_width=True)
 
-    # Show recent orders
-    recent = session.sql(
-        """
-        SELECT ORDER_ID, NAME_ON_ORDER, INGREDIENTS, ORDER_TS
-        FROM SMOOTHIES.PUBLIC.ORDERS
-        ORDER BY ORDER_TS DESC
-        LIMIT 10
-        """
-    ).to_pandas()
-    st.dataframe(recent, use_container_width=True)
+# -------------------------------
+# Submit Order
+# -------------------------------
+if st.button("Submit Order"):
+    if not name_on_order or not ingredients_list:
+        st.error("⚠️ Please enter a name and select at least one ingredient.")
+    else:
+        # Ensure table exists
+        session.sql(
+            """
+            CREATE TABLE IF NOT EXISTS SMOOTHIES.PUBLIC.ORDERS (
+                ORDER_ID INTEGER AUTOINCREMENT,
+                NAME_ON_ORDER STRING NOT NULL,
+                INGREDIENTS STRING NOT NULL,
+                ORDER_TS TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+            )
+            """
+        ).collect()
+
+        # Insert new order safely
+        session.sql(
+            "INSERT INTO SMOOTHIES.PUBLIC.ORDERS (NAME_ON_ORDER, INGREDIENTS) VALUES (%s, %s)",
+            params=(name_on_order.strip(), ingredients_string.strip()),
+        ).collect()
+
+        st.success(f"✅ Your Smoothie is ordered, {name_on_order.strip()}!")
+
+        # Show recent orders
+        recent = session.sql(
+            """
+            SELECT ORDER_ID, NAME_ON_ORDER, INGREDIENTS, ORDER_TS
+            FROM SMOOTHIES.PUBLIC.ORDERS
+            ORDER BY ORDER_TS DESC
+            LIMIT 10
+            """
+        ).to_pandas()
+        st.dataframe(recent, use_container_width=True)
