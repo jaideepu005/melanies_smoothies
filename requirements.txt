@@ -1,15 +1,4 @@
-name: snowpark-env
-channels:
-  - defaults
-  - conda-forge
-dependencies:
-  - python=3.10
-  - snowflake-snowpark-python[pandas]
-  - notebook
-  - jupyterlab
-  - ipykernel
-  - pip
-  - pip:
-      - snowflake-connector-python
-      - pyarrow
-      - pandas
+# requirements.txt
+snowflake-snowpark-python
+streamlit
+requests
