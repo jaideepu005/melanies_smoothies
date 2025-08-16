@@ -19,7 +19,7 @@ st.write("Choose the fruits you want in your custom Smoothie! Up to five.")
 name_on_order = st.text_input("Name On Smoothie:").strip()
 st.caption(f"The name on your smoothie will be: {name_on_order or '—'}")
 
-# --- Load fruit options from Snowflake (cache to reduce queries)
+# --- Load fruit options from Snowflake (cached for 5 mins)
 @st.cache_data(ttl=300)
 def load_fruit_options():
     sp_df = (
@@ -31,7 +31,7 @@ def load_fruit_options():
 
 pd_df = load_fruit_options()
 
-# Safety: ensure required columns exist
+# --- Safety: ensure required columns exist
 required_cols = {"FRUIT_NAME", "SEARCH_ON"}
 if not required_cols.issubset(set(pd_df.columns)):
     st.error("FRUIT_OPTIONS table must contain FRUIT_NAME and SEARCH_ON columns.")
@@ -69,7 +69,7 @@ if ingredients_list:
 # --- Build clean ingredients string
 ingredients_string = ", ".join(ingredients_list) if ingredients_list else ""
 
-# --- Validation and submit
+# --- Validation + preview
 submit_disabled = (not name_on_order) or (len(ingredients_list) == 0)
 submit_col, preview_col = st.columns([1, 3])
 with submit_col:
@@ -83,6 +83,7 @@ with preview_col:
         },
     )
 
+# --- Submit order
 if submitted:
     # Ensure target table exists
     session.sql(
@@ -96,16 +97,18 @@ if submitted:
         """
     ).collect()
 
-    # ✅ FIX: align schema with table (NAME_ON_ORDER first, INGREDIENTS second)
+    # ✅ FIX: insert with schema aligned (name-based matching)
     df_to_write = session.create_dataframe(
         [[name_on_order, ingredients_string]],
         schema=["NAME_ON_ORDER", "INGREDIENTS"],
     )
-    df_to_write.write.save_as_table("SMOOTHIES.PUBLIC.ORDERS", mode="append")
+    df_to_write.write.mode("append").option("column_order", "name").save_as_table(
+        "SMOOTHIES.PUBLIC.ORDERS"
+    )
 
-    st.success("Your Smoothie is ordered!")
+    st.success("✅ Your Smoothie is ordered!")
 
-    # Show the last few orders for feedback
+    # Show recent orders
     recent = session.sql(
         """
         SELECT ORDER_ID, NAME_ON_ORDER, INGREDIENTS, ORDER_TS
